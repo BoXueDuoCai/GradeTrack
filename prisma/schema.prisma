@@ -1,0 +1,291 @@
+// 高中成绩分析系统 - 多用户版数据模型 V2
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 用户
+model User {
+  id                String   @id @default(cuid())
+  username          String   @unique
+  password          String   // bcrypt hash
+  role              String   @default("user") // super_admin | admin | user | test_user
+  displayName       String?
+  // 小三门选科
+  electiveSubjects  String?
+  // 自定义考试类型
+  customExamTypes   String?
+  // 登录追踪
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  // 强制下次登录改密码（批量导入、超管重置成123456时为true）
+  mustChangePassword Boolean @default(false)
+  // 管理员权限（JSON 数组：["batch_import","create_group","publish_plan","manage_users"]）
+  // 仅对 admin 角色有效；super_admin 默认拥有全部权限
+  permissions       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  sessions          Session[]
+  exams             Exam[]
+  goals             Goal[]
+  groupMemberships  GroupMember[]
+  groupViewerships  GroupViewer[]
+  createdGroups     Group[]
+  studyPlans        StudyPlan[]
+  personalPlans     PersonalPlan[]
+  notifications     Notification[]
+  announcementReads AnnouncementRead[]
+  studyPlanCompletions StudyPlanCompletion[]
+}
+
+// 会话
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime // 2 小时 TTL
+
+  @@index([userId])
+}
+
+// 考试记录
+model Exam {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name           String
+  examType       String
+  customSubjects String?
+  grade          String
+  date           DateTime
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  scores         SubjectScore[]
+
+  @@index([userId, date])
+}
+
+// 单科成绩
+model SubjectScore {
+  id              String   @id @default(cuid())
+  examId          String
+  exam            Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  subject         String
+  rawScore        Float?
+  fullScore       Float?
+  assignedScore   Float?
+  grade           String?
+  classRank       Int?
+  gradeRank       Int?
+  note            String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  subScores       SubScore[]
+
+  @@index([examId])
+  @@index([subject])
+}
+
+// 小分
+model SubScore {
+  id              String   @id @default(cuid())
+  subjectScoreId  String
+  subjectScore    SubjectScore @relation(fields: [subjectScoreId], references: [id], onDelete: Cascade)
+  questionNo      String
+  score           Float?
+  fullScore       Float?
+
+  @@index([subjectScoreId])
+}
+
+// 目标
+model Goal {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  status      String   @default("active")
+  examId      String?
+  dueDate     DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, status])
+}
+
+// 小组
+model Group {
+  id          String   @id @default(cuid())
+  name        String
+  creatorId   String
+  creator     User     @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members     GroupMember[]
+  viewers     GroupViewer[]
+  studyPlans  StudyPlan[]
+}
+
+// 小组成员
+model GroupMember {
+  id          String   @id @default(cuid())
+  groupId     String
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  studentNo   String   // 学号（CSV 第一列）
+  createdAt   DateTime @default(now())
+
+  @@unique([groupId, userId])
+  @@index([groupId])
+  @@index([userId])
+}
+
+// 小组查看者（被创建者额外授权的管理员）
+model GroupViewer {
+  id          String   @id @default(cuid())
+  groupId     String
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([groupId, userId])
+}
+
+// 学习计划（管理员发布给小组）
+model StudyPlan {
+  id          String   @id @default(cuid())
+  groupId     String
+  group       Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  title       String
+  content     String?
+  dueDate     DateTime?
+  createdBy   String
+  creator     User     @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  completions StudyPlanCompletion[]
+  attachments StudyPlanAttachment[]
+
+  @@index([groupId])
+}
+
+// 个人学习计划（test_user 专属功能）
+model PersonalPlan {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  content     String?
+  dueDate     DateTime?
+  status      String   @default("pending") // pending | done
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, status])
+}
+
+// 通知（用户个人通知，如目标临近截止、新学习计划）
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // goal_due_soon | new_study_plan | announcement | system
+  title     String
+  content   String?
+  link      String?  // 可选跳转链接
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+// 公告（管理员/超管发布，支持多目标）
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  scope       String   @default("all") // all | groups | users
+  authorId    String?
+  authorName  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  targets     AnnouncementTarget[]
+  reads       AnnouncementRead[]
+}
+
+model AnnouncementTarget {
+  id              String   @id @default(cuid())
+  announcementId  String
+  announcement    Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  targetType      String   // group | user
+  targetId        String
+  targetName      String?
+  @@index([announcementId])
+}
+
+// 公告阅读记录
+model AnnouncementRead {
+  id              String   @id @default(cuid())
+  announcementId  String
+  announcement    Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  readAt          DateTime @default(now())
+  @@unique([announcementId, userId])
+}
+
+// 学习计划完成记录（学生标记完成）
+model StudyPlanCompletion {
+  id          String   @id @default(cuid())
+  studyPlanId String
+  studyPlan   StudyPlan @relation(fields: [studyPlanId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  completedAt DateTime @default(now())
+  note        String?  // 学生可选填的完成备注
+
+  @@unique([studyPlanId, userId])
+  @@index([studyPlanId])
+}
+
+// 学习计划附件
+model StudyPlanAttachment {
+  id          String   @id @default(cuid())
+  studyPlanId String
+  studyPlan   StudyPlan @relation(fields: [studyPlanId], references: [id], onDelete: Cascade)
+  filename    String
+  storagePath String
+  mimeType    String
+  size        Int
+  uploadedAt  DateTime @default(now())
+  @@index([studyPlanId])
+}
+
+// 下次考试日期设置
+model NextExamSetting {
+  id        String   @id @default(cuid())
+  scope     String   // user | group
+  userId    String?
+  groupId   String?
+  examDate  DateTime
+  examName  String?
+  updatedAt DateTime @default(now()) @updatedAt
+  @@index([userId])
+  @@index([groupId])
+}
